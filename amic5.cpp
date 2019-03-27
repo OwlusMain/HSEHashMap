@@ -13,7 +13,7 @@
 namespace hmap {
 
 
-    const int TABLESIZE = 5e5;
+    static constexpr size_t TABLE_START_SZ = 1;
 
     template<class KeyType, class ValueType, class Hash = std::hash<KeyType> > class HashMap {
         struct MapElement {
@@ -70,17 +70,30 @@ namespace hmap {
         size_t sz = 0;
         const_iterator cSt, cFin;
         iterator st, fin;
+        size_t tableSize = TABLE_START_SZ;
 
 
     public:
-        constexpr HashMap(const Hash& hasher_obj = Hash()) : hashArray(TABLESIZE), hasher(hasher_obj) {}
+        constexpr HashMap(const Hash& hasher_obj = Hash()) : hashArray(TABLE_START_SZ), hasher(hasher_obj) {}
 
         template<typename Ptr>
         HashMap(Ptr first, Ptr last, const Hash& hasher_obj = Hash()) :
-            hashArray(TABLESIZE), hasher(hasher_obj) {
+            hasher(hasher_obj) {
             MapElement* prev = nullptr;
+
+            Ptr curPtr = first;
+            size_t cntElems = 0;
+            while (curPtr != last) {
+                ++cntElems;
+                ++curPtr;
+            }
+            tableSize = 1;
+            while (tableSize < cntElems) {
+                tableSize *= 2;
+            }
+            hashArray.assign(tableSize);
             while (first != last) {
-                size_t curHash = hasher(first->first) % TABLESIZE;
+                size_t curHash = hasher(first->first) % tableSize;
                 hashArray[curHash].push_back(MapElement(*first, curHash));
                 if (sz > 0) {
                     hashArray[curHash].back().prev = prev;
@@ -95,27 +108,36 @@ namespace hmap {
         }
 
         HashMap(const std::initializer_list<std::pair<const KeyType, ValueType>>& elements, const Hash& hasher_obj = Hash()) :
-            hashArray(TABLESIZE), hasher(hasher_obj) {
-            MapElement *prev = nullptr;
-            for (auto& x : elements) {
-                size_t curHash = hasher(x.first) % TABLESIZE;
-                hashArray[curHash].push_back(MapElement(x, curHash));
-                if (sz > 0) {
-                    hashArray[curHash].back().prev = prev;
-                    prev->next = &hashArray[curHash].back();
-                } else
-                    st.val = &hashArray[curHash].back(), cSt.val = &hashArray[curHash].back();
-                prev = &hashArray[curHash].back();
-                ++sz;
-            }
-            fin.val = prev, cFin.val = prev;
-        }
+            HashMap(elements.begin(), elements.end(), hasher_obj) {}
 
         HashMap& operator= (const HashMap& other) {
             for (auto cur = other.begin(); cur != other.end(); ++cur) {
                 insert(*cur);
             }
             return *this;
+        }
+
+
+        void autoResize() {
+            size_t tableSizeOld = tableSize;
+            while (tableSize >= sz * 2) {
+                tableSize /= 2;
+            }
+            while (tableSize < sz) {
+                tableSize *= 2;
+            }
+
+            if (tableSize == tableSizeOld)
+                return;
+
+            std::vector<std::list<MapElement>> hashArrayOld = std::move(hashArray);
+            st.val = fin.val = cSt.val = cFin.val = nullptr;
+            hashArray.assign(tableSize);
+            for (const auto& x : hashArrayOld) {
+                for (const auto& y : x) {
+                    *this->insert(y->val);
+                }
+            }
         }
 
 
@@ -128,7 +150,7 @@ namespace hmap {
         }
 
         void insert(std::pair<const KeyType, ValueType> elem) {
-            size_t curHash = hasher(elem.first) % TABLESIZE;
+            size_t curHash = hasher(elem.first) % tableSize;
             for (const auto& x : hashArray[curHash]) {
                 if (x.val.first == elem.first) {
                     return;
@@ -145,10 +167,12 @@ namespace hmap {
             }
             fin.val = &hashArray[curHash].back();
             cFin.val = &hashArray[curHash].back();
+
+            autoResize();
         }
 
         void erase(const KeyType key) {
-            size_t curHash = hasher(key) % TABLESIZE;
+            size_t curHash = hasher(key) % tableSize;
             for (auto x = hashArray[curHash].begin(); x != hashArray[curHash].end(); ++x) {
                 if (x->val.first == key) {
                     if (&(*x) == fin.val)
@@ -169,10 +193,12 @@ namespace hmap {
                     break;
                 }
             }
+
+            autoResize();
         }
 
         const_iterator find(const KeyType key) const {
-            size_t curHash = hasher(key) % TABLESIZE;
+            size_t curHash = hasher(key) % tableSize;
             for (const auto& x : hashArray[curHash]) {
                 if (x.val.first == key) {
                     const_iterator answ;
@@ -184,7 +210,7 @@ namespace hmap {
         }
 
         iterator find(const KeyType key) {
-            size_t curHash = hasher(key) % TABLESIZE;
+            size_t curHash = hasher(key) % tableSize;
             for (auto& x : hashArray[curHash]) {
                 if (x.val.first == key) {
                     iterator answ;
@@ -196,7 +222,7 @@ namespace hmap {
         }
 
         ValueType& operator[] (const KeyType key) {
-            size_t curHash = hasher(key) % TABLESIZE;
+            size_t curHash = hasher(key) % tableSize;
             for (auto& x : hashArray[curHash]) {
                 if (x.val.first == key) {
                     return x.val.second;
@@ -207,7 +233,7 @@ namespace hmap {
         }
 
         const ValueType& at(const KeyType key) const {
-            size_t curHash = hasher(key) % TABLESIZE;
+            size_t curHash = hasher(key) % tableSize;
             for (const auto& x : hashArray[curHash]) {
                 if (x.val.first == key) {
                     return x.val.second;
@@ -233,15 +259,8 @@ namespace hmap {
         }
 
         void clear() {
-            std::vector<size_t> inds;
-            for (auto cur = begin(); cur != end(); ++cur) {
-                inds.push_back(cur.val->i);
-            }
-            for (const auto& x : inds) {
-                while (!hashArray[x].empty()) {
-                    hashArray[x].pop_back();
-                }
-            }
+            hashArray.assign(1);
+            tableSize = 1;
             st.val = nullptr, fin.val = nullptr, cSt.val = nullptr, cFin.val = nullptr;
             sz = 0;
         }
