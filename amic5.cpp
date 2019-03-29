@@ -45,14 +45,6 @@ namespace hmap {
         HashMap(const std::initializer_list<std::pair<const KeyType, ValueType>>& elements, const Hash& hasherObj = Hash()) :
             HashMap(elements.begin(), elements.end(), hasherObj) {}
 
-        HashMap& operator= (const HashMap other) {
-            this->clear();
-            for (auto cur = other.begin(); cur != other.end(); ++cur) {
-                insert(*cur);
-            }
-            return *this;
-        }
-
 
         void autoResize() {
             size_t tableSizeOld = tableSize;
