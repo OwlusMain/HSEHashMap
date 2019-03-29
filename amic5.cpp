@@ -14,103 +14,39 @@ namespace hmap {
 
 
     static constexpr size_t TABLE_START_SZ = 1;
+    static constexpr int TABLESZ_DIV_SZ = 2;
 
     template<class KeyType, class ValueType, class Hash = std::hash<KeyType> > class HashMap {
-        struct MapElement {
-            std::pair<const KeyType, ValueType> val;
-            MapElement *next, *prev;
-            size_t i;
-
-            MapElement(std::pair<KeyType, ValueType> newVal, size_t index = 0, MapElement* nextEl = nullptr, MapElement* prevEl = nullptr) :
-                val(newVal), next(nextEl), prev(prevEl), i(index) {}
-        };
+        typedef std::pair<const KeyType, ValueType> MapElement;
 
     public:
-
-        template<typename T, typename ElT> class iteratorBase {
-
-        public:
-            T* val = nullptr;
-
-            iteratorBase& operator++ () {
-                val = val->next;
-                return *this;
-            }
-
-            iteratorBase operator++ (int) {
-                iteratorBase prevVal = *this;
-                val = val->next;
-                return prevVal;
-            }
-
-            ElT& operator* () const {
-                return val->val;
-            }
-
-            ElT* operator-> () const {
-                return &(val->val);
-            }
-
-            bool operator== (const iteratorBase& other) const noexcept {
-                return val == other.val;
-            }
-
-            bool operator!= (const iteratorBase& other) const noexcept {
-                return val != other.val;
-            }
-
-        };
-
-        class const_iterator : public iteratorBase<const MapElement, const std::pair<const KeyType, ValueType>> {};
-        class iterator : public iteratorBase<MapElement, std::pair<const KeyType, ValueType>> {};
+        using const_iterator = typename std::list<MapElement>::const_iterator;
+        using iterator = typename std::list<MapElement>::iterator;
 
     private:
-        std::vector<std::list<MapElement>> hashArray;
+        std::vector<std::list<std::pair<const_iterator, iterator>>> hashArray;
         Hash hasher;
         size_t sz = 0;
-        const_iterator cSt, cFin;
-        iterator st, fin;
+        std::list<MapElement> elemArray;
         size_t tableSize = TABLE_START_SZ;
 
-
     public:
-        constexpr HashMap(const Hash& hasher_obj = Hash()) : hashArray(TABLE_START_SZ), hasher(hasher_obj) {}
+        constexpr explicit HashMap(const Hash& hasherObj = Hash()) : hashArray(TABLE_START_SZ), hasher(hasherObj) {}
 
-        template<typename Ptr>
-        HashMap(Ptr first, Ptr last, const Hash& hasher_obj = Hash()) :
-            hasher(hasher_obj) {
-            MapElement* prev = nullptr;
-
-            Ptr curPtr = first;
-            size_t cntElems = 0;
-            while (curPtr != last) {
-                ++cntElems;
-                ++curPtr;
-            }
-            tableSize = 1;
-            while (tableSize < cntElems) {
-                tableSize *= 2;
-            }
-            hashArray.assign(tableSize);
+        template<typename ForwardIt>
+        HashMap(ForwardIt first, ForwardIt last, const Hash& hasherObj = Hash()) :
+            HashMap(hasherObj) {
             while (first != last) {
-                size_t curHash = hasher(first->first) % tableSize;
-                hashArray[curHash].push_back(MapElement(*first, curHash));
-                if (sz > 0) {
-                    hashArray[curHash].back().prev = prev;
-                    prev->next = &hashArray[curHash].back();
-                } else
-                    st.val = &hashArray[curHash].back(), cSt.val = &hashArray[curHash].back();
-                prev = &hashArray[curHash].back();
-                ++sz;
+                this->insert(*first);
                 ++first;
             }
-            fin.val = prev, cFin.val = prev;
         }
 
-        HashMap(const std::initializer_list<std::pair<const KeyType, ValueType>>& elements, const Hash& hasher_obj = Hash()) :
-            HashMap(elements.begin(), elements.end(), hasher_obj) {}
+        HashMap(const std::initializer_list<std::pair<const KeyType, ValueType>>& elements, const Hash& hasherObj = Hash()) :
+            HashMap(elements.begin(), elements.end(), hasherObj) {}
 
-        HashMap& operator= (const HashMap& other) {
+        HashMap& operator= (const HashMap other) {
+            this->clear();
             for (auto cur = other.begin(); cur != other.end(); ++cur) {
                 insert(*cur);
             }
@@ -120,23 +56,21 @@ namespace hmap {
 
         void autoResize() {
             size_t tableSizeOld = tableSize;
-            while (tableSize >= sz * 2) {
+            while (tableSize >= TABLESZ_DIV_SZ * 2 && tableSize >= sz * TABLESZ_DIV_SZ * 2) {
                 tableSize /= 2;
             }
-            while (tableSize < sz) {
+            while (tableSize < sz * TABLESZ_DIV_SZ / 2) {
                 tableSize *= 2;
             }
 
             if (tableSize == tableSizeOld)
                 return;
-
-            std::vector<std::list<MapElement>> hashArrayOld = std::move(hashArray);
-            st.val = fin.val = cSt.val = cFin.val = nullptr;
-            hashArray.assign(tableSize);
-            for (const auto& x : hashArrayOld) {
-                for (const auto& y : x) {
-                    *this->insert(y->val);
-                }
+            hashArray.assign(tableSize, std::list<std::pair<const_iterator, iterator>>());
+            std::list<MapElement> elemArrayOld = std::move(elemArray);
+            elemArray.clear();
+            sz = 0;
+            for (const auto& x : elemArrayOld) {
+                this->insert(x, false);
             }
         }
 
@@ -149,119 +83,90 @@ namespace hmap {
             return sz == 0;
         }
 
-        void insert(std::pair<const KeyType, ValueType> elem) {
+        void insert(std::pair<const KeyType, ValueType> elem, bool needAR = true) {
             size_t curHash = hasher(elem.first) % tableSize;
-            for (const auto& x : hashArray[curHash]) {
-                if (x.val.first == elem.first) {
-                    return;
-                }
+            iterator it = this->find(elem.first);
+            if (it == elemArray.end()) {
+                ++sz;
+                elemArray.push_back(elem);
+                hashArray[curHash].push_back({ --elemArray.cend(), --elemArray.end() });
+                if (needAR)
+                    autoResize();
             }
-            ++sz;
-            hashArray[curHash].push_back(MapElement(elem, curHash));
-            if (fin.val != nullptr) {
-                fin.val->next = &hashArray[curHash].back();
-                hashArray[curHash].back().prev = fin.val;
-            } else {
-                st.val = &hashArray[curHash].back();
-                cSt.val = &hashArray[curHash].back();
-            }
-            fin.val = &hashArray[curHash].back();
-            cFin.val = &hashArray[curHash].back();
-
-            autoResize();
         }
 
         void erase(const KeyType key) {
             size_t curHash = hasher(key) % tableSize;
-            for (auto x = hashArray[curHash].begin(); x != hashArray[curHash].end(); ++x) {
-                if (x->val.first == key) {
-                    if (&(*x) == fin.val)
-                        fin.val = x->prev;
-                    cFin.val = x->prev;
-                    if (x->prev != nullptr) {
-                        x->prev->next = x->next;
-                    }
-                    if (x->next != nullptr) {
-                        x->next->prev = x->prev;
-                    }
-                    if (&(*x) == st.val) {
-                        st.val = nullptr;
-                        cSt.val = nullptr;
-                    }
-                    hashArray[curHash].erase(x);
+            for (auto xIt = hashArray[curHash].begin(); xIt != hashArray[curHash].end(); ++xIt) {
+                if (xIt->first->first == key) {
+                    elemArray.erase(xIt->second);
+                    hashArray[curHash].erase(xIt);
                     --sz;
-                    break;
+
+                    autoResize();
+                    return;
                 }
             }
-
-            autoResize();
         }
 
         const_iterator find(const KeyType key) const {
             size_t curHash = hasher(key) % tableSize;
             for (const auto& x : hashArray[curHash]) {
-                if (x.val.first == key) {
-                    const_iterator answ;
-                    answ.val = &x;
-                    return answ;
+                if (x.first->first == key) {
+                    return x.first;
                 }
             }
-            return const_iterator();
+            return elemArray.cend();
         }
 
         iterator find(const KeyType key) {
             size_t curHash = hasher(key) % tableSize;
-            for (auto& x : hashArray[curHash]) {
-                if (x.val.first == key) {
-                    iterator answ;
-                    answ.val = &x;
-                    return answ;
+            for (const auto& x : hashArray[curHash]) {
+                if (x.first->first == key) {
+                    return x.second;
                 }
             }
-            return iterator();
+            return elemArray.end();
         }
 
         ValueType& operator[] (const KeyType key) {
-            size_t curHash = hasher(key) % tableSize;
-            for (auto& x : hashArray[curHash]) {
-                if (x.val.first == key) {
-                    return x.val.second;
-                }
+            iterator curIt = this->find(key);
+            if (curIt != elemArray.end()) {
+                return curIt->second;
             }
-            insert({ key, ValueType() });
-            return hashArray[curHash].back().val.second;
+
+            this->insert(std::make_pair(key, ValueType()));
+            return this->find(key)->second;
         }
 
         const ValueType& at(const KeyType key) const {
-            size_t curHash = hasher(key) % tableSize;
-            for (const auto& x : hashArray[curHash]) {
-                if (x.val.first == key) {
-                    return x.val.second;
-                }
+            const_iterator curIt = this->find(key);
+            if (curIt != elemArray.cend()) {
+                return curIt->second;
             }
             throw std::out_of_range("out of range");
         }
 
-        iterator begin() {
-            return st;
+        iterator begin() noexcept {
+            return elemArray.begin();
         }
 
-        const_iterator begin() const {
-            return cSt;
+        const_iterator begin() const noexcept {
+            return elemArray.cbegin();
         }
 
-        iterator end() {
-            return iterator();
+        iterator end() noexcept {
+            return elemArray.end();
         }
 
-        const_iterator end() const {
-            return const_iterator();
+        const_iterator end() const noexcept {
+            return elemArray.cend();
         }
 
         void clear() {
-            hashArray.assign(1);
-            tableSize = 1;
-            st.val = nullptr, fin.val = nullptr, cSt.val = nullptr, cFin.val = nullptr;
+            hashArray.assign(TABLE_START_SZ, std::list<std::pair<const_iterator, iterator>>());
+            tableSize = TABLE_START_SZ;
+            elemArray.clear();
             sz = 0;
         }
 
